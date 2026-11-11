@@ -1,0 +1,48 @@
+[project]
+name = "sift"
+version = "0.1.0.dev0"
+description = "Imports large CSV files into a multi-tenant catalog with bounded memory, all-or-nothing apply and idempotent imports."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Kaulin Mindiola" }]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # D8: Django 5.2 LTS. drf-spectacular and simplejwt do not declare Django 6.1 yet.
+    "Django>=5.2,<5.3",
+    "djangorestframework>=3.16",
+    "djangorestframework-simplejwt>=5.5",
+    "drf-spectacular>=0.28",
+    "channels>=4.3",
+    "channels-redis>=4.2",
+    "celery[redis]>=5.5",
+    "redis>=5.2",
+    "psycopg[binary]>=3.2",
+    "boto3>=1.35",
+    "structlog>=24.4",
+    "prometheus-client>=0.21",
+    "uvicorn[standard]>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.120",
+    "mypy>=1.13",
+    "django-stubs[compatible-mypy]>=5.1",
+    "djangorestframework-stubs[compatible-mypy]>=3.15",
+    "boto3-stubs[s3]>=1.35",
+    "ruff>=0.8",
+    "pre-commit>=4.0",
+    "psutil>=6.1",
+]
+tools = [
+    "httpx>=0.28",
+    "websockets>=14.0",
+]
+
+[tool.uv]
+# Sift is an application, not a library: uv installs its dependencies only.
+package = false
