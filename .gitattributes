@@ -1,0 +1,11 @@
+# Normalize every text file to LF in the repository and in the working tree,
+# so scripts and compose files reach Linux containers without CRLF.
+* text=auto eol=lf
+
+# CSV fixtures keep their exact bytes: RFC 4180 uses CRLF and tests rely on it.
+tests/fixtures/csv/*.csv -text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.gif binary

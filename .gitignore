@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Environment and secrets
+.env
+
+# Generated data and benchmark output
+/*.csv
+/*.oracle.json
+bench-out/
+
+# Django
+staticfiles/
+
+# Editors
+.idea/
+.vscode/
