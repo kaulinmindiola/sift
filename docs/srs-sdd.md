@@ -1,6 +1,8 @@
 # Sift — SRS and SDD
 
-Version 0.1 · 2026-11-10 · Status: draft (decisions D1–D12 open, section 19)
+Version 0.1.1 · 2026-11-11 · Status: draft (decisions D1–D12 open, section 19)
+
+Revision 0.1.1: table names aligned with section 8; requirements without a phase scheduled in section 20; domain-purity check mechanism stated (NFR-10).
 
 **Sift imports large CSV files into a multi-tenant catalog without loading them into memory, without applying half a file, and without applying anything twice.**
 
@@ -61,7 +63,7 @@ Web UI beyond a single demo page, XLSX and other formats (backlog), user-defined
 - **Upload**: an object in storage plus the record that authorizes it.
 - **Import job (job)**: one attempt to bring one uploaded file into the catalog.
 - **Record**: one CSV data record (a logical row; may span several lines when quoted).
-- **Staging**: the `import_rows` table that holds the valid, normalized records of a job before apply.
+- **Staging**: the `imports_row` table that holds the valid, normalized records of a job before apply.
 - **Batch**: `BATCH_SIZE` consecutive records validated and committed together with the checkpoint.
 - **Checkpoint**: the number of the last record whose batch committed.
 - **Preview**: the diff between staging and the current catalog, computed after validation.
@@ -146,7 +148,7 @@ Python 3.12; PostgreSQL 17 single primary; Redis 7; MinIO as S3-compatible stora
 | --- | --- | --- |
 | FR-JOB-1 | `POST /orgs/{org}/imports` with `upload_id`, `dataset` (`products`), `mode` (`upsert` or `sync`) and `auto_apply` (default `false`) creates a job in `queued`, enqueues validation after commit, and responds `202` with the job. | Must |
 | FR-JOB-2 | Optional `Idempotency-Key` header: same key and same body within 24 h returns the original job (`200`); same key with a different body → `409 idempotency_key_reused`; concurrent requests with one key create one job. | Must |
-| FR-JOB-3 | Jobs follow exactly the state machine of section 9. Every transition is written to `job_transitions` with reason and request id. | Must |
+| FR-JOB-3 | Jobs follow exactly the state machine of section 9. Every transition is written to `imports_jobtransition` with reason and request id. | Must |
 | FR-JOB-4 | `GET /orgs/{org}/imports` lists jobs newest first with cursor pagination and filters `status`, `created_by`. `GET .../imports/{id}` returns the job with counts, warnings, failure code and timestamps. | Must |
 | FR-JOB-5 | `POST .../imports/{id}/cancel` on `queued`, `validating` or `validated` → `cancelled` (a running validation stops at its next batch boundary); otherwise `409 job_not_cancellable`. | Must |
 | FR-JOB-6 | At most `MAX_ACTIVE_JOBS_PER_ORG` (3) jobs per org in `validating`; more wait in `queued`. | Could |
@@ -229,7 +231,7 @@ Python 3.12; PostgreSQL 17 single primary; Redis 7; MinIO as S3-compatible stora
 
 | ID | Requirement | Priority |
 | --- | --- | --- |
-| FR-SEC-1 | Secrets come from environment variables and are never logged. File contents and cell values are never logged (they are stored, truncated, only in `import_errors.value`). | Must |
+| FR-SEC-1 | Secrets come from environment variables and are never logged. File contents and cell values are never logged (they are stored, truncated, only in `imports_rowerror.value`). | Must |
 | FR-SEC-2 | In the error report, any cell starting with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` (CSV formula injection, OWASP). | Must |
 | FR-SEC-3 | API errors use `application/problem+json` (RFC 9457) with a stable `code`; they never include stack traces or SQL. | Must |
 
@@ -246,7 +248,7 @@ Python 3.12; PostgreSQL 17 single primary; Redis 7; MinIO as S3-compatible stora
 | NFR-7 | Quality gates in CI: `ruff check`, `ruff format --check`, `mypy` (strict on `domain` and `services`, with `django-stubs` and `djangorestframework-stubs`), `pytest` with at least 85% line coverage of `sift/` (migrations excluded), `manage.py makemigrations --check`. |
 | NFR-8 | `docker compose up --build` starts every service, creates the bucket, applies migrations, loads a demo org and user, and exposes the API. |
 | NFR-9 | Python 3.12; dependencies pinned in `uv.lock`; Django per D8. |
-| NFR-10 | The `domain` package has no Django, Celery, boto3 or database imports (checked in CI). |
+| NFR-10 | The `domain` package has no Django, Celery, boto3 or database imports (checked in CI by an `ast`-based architecture test, `tests/architecture/test_domain_purity.py`). |
 | NFR-11 | README opens with the problem, shows an evidence table and measurements, and lists limitations. |
 
 ## 5. Verification matrix
@@ -295,7 +297,7 @@ sift/                       # Django project: settings, urls, asgi, celery app
     domain/                 # PURE: records, rules, normalization, row hash, state machine, errors
     services/               # use cases: create_job, validate_job, apply_job, cancel_job, rescue
     selectors.py            # read queries (lists, preview, errors) with explicit select/prefetch
-    staging.py              # COPY into import_rows, set-based SQL (duplicates, diff, upsert)
+    staging.py              # COPY into imports_row, set-based SQL (duplicates, diff, upsert)
     tasks.py                # Celery tasks: thin, delegate to services
     consumers.py            # Channels consumer
     api/                    # DRF serializers, views, urls
@@ -335,7 +337,7 @@ DRF views are synchronous and run in the ASGI thread pool; only the consumer is 
 ### 7.2 Validation (one task run)
 
 ```
-claim: UPDATE import_jobs SET status='validating', run_token=:new, attempts=attempts+1, heartbeat_at=now()
+claim: UPDATE imports_job SET status='validating', run_token=:new, attempts=attempts+1, heartbeat_at=now()
        WHERE id=:id AND status IN ('queued','validating') AND run_token=:expected RETURNING checkpoint_row
        -- 0 rows: stale or duplicate message -> exit
 open S3 stream -> HashingReader (sha256, bytes_read) -> UTF-8 decoder -> csv.reader
@@ -349,14 +351,14 @@ commit_batch() for the tail
 finalize_validation()
 
 commit_batch():   BEGIN
-                    COPY import_rows FROM STDIN (valid rows)
-                    INSERT import_errors (until MAX_STORED_ERRORS)
-                    UPDATE import_jobs SET checkpoint_row, counters, error_counts, heartbeat_at
+                    COPY imports_row FROM STDIN (valid rows)
+                    INSERT imports_rowerror (until MAX_STORED_ERRORS)
+                    UPDATE imports_job SET checkpoint_row, counters, error_counts, heartbeat_at
                       WHERE id=:id AND run_token=:mine AND NOT cancel_requested   -- 0 rows -> abort
                   COMMIT; then progress event (throttled)
 
 finalize_validation():  BEGIN
-                    mark later duplicates (window function), move them to import_errors
+                    mark later duplicates (window function), move them to imports_rowerror
                     error-rate check -> rejected | validated
                     compute preview counts (section 12)
                     store sha256, size; identical_to_job warning
@@ -368,19 +370,19 @@ Because the batch, its errors and the checkpoint commit together, a crash loses 
 ### 7.3 Apply
 
 ```
-claim: UPDATE import_jobs SET run_token=:new, attempts=attempts+1, lease_until=now()+APPLY_LEASE_S
+claim: UPDATE imports_job SET run_token=:new, attempts=attempts+1, lease_until=now()+APPLY_LEASE_S
        WHERE id=:id AND status='applying' AND run_token=:expected
 BEGIN
   SELECT pg_advisory_xact_lock(hashtext('sift:apply'), :org_lock_key)     -- serializes per org
-  SELECT status FROM import_jobs WHERE id=:id FOR UPDATE                    -- completed already? -> no-op
-  recompute diff counts (staging vs products)
-  INSERT INTO products (...) SELECT ... FROM import_rows WHERE job_id=:id
+  SELECT status FROM imports_job WHERE id=:id FOR UPDATE                    -- completed already? -> no-op
+  recompute diff counts (staging vs catalog_product)
+  INSERT INTO catalog_product (...) SELECT ... FROM imports_row WHERE job_id=:id
     ON CONFLICT (organization_id, sku) DO UPDATE SET ...
-    WHERE products.row_hash IS DISTINCT FROM EXCLUDED.row_hash
-  [sync] UPDATE products SET active=false, last_job_id=:id
+    WHERE catalog_product.row_hash IS DISTINCT FROM EXCLUDED.row_hash
+  [sync] UPDATE catalog_product SET active=false, last_job_id=:id
          WHERE organization_id=:org AND active AND NOT EXISTS (staging row with that sku)
-  DELETE FROM import_rows WHERE job_id=:id
-  UPDATE import_jobs SET status='completed', applied counts, finished_at; transition row
+  DELETE FROM imports_row WHERE job_id=:id
+  UPDATE imports_job SET status='completed', applied counts, finished_at; transition row
 COMMIT; status event
 ```
 
@@ -402,7 +404,7 @@ The new `run_token` invalidates the old worker if it is only slow, not dead: its
 
 ## 8. Data model
 
-PostgreSQL; Django migrations own the schema. Hand-written SQL lives only in `imports/staging.py` and is covered by integration tests.
+PostgreSQL; Django migrations own the schema. Every model sets `Meta.db_table` explicitly to the names below, and every other section uses these names. Hand-written SQL lives only in `imports/staging.py` and is covered by integration tests.
 
 **accounts\_user**: custom user, `email` unique (login), `full_name`, Django auth fields.
 
@@ -706,11 +708,11 @@ Each ADR is written in `docs/adr/NNN-title.md` (template: Status, Context, Decis
 
 | Phase | Day | Content | Exit gate |
 | --- | --- | --- | --- |
-| F0 | 1 | Repo, uv, Django project, apps, settings from env, compose (postgres, redis, minio, migrate), CI lint/types/test, ADR-001/007/010 | `docker compose up` green; CI green |
-| F1 | 2 | Custom user, orgs, memberships, JWT, `OrgScopedViewSet`, problem+json, request id, `seed_demo`; ADR-009/013 | VR-7 green on the routes that exist; VR-21 for auth |
-| F2 | 3 | Uploads with presigned POST, job creation with idempotency, state machine in `domain`; ADR-002/012 | VR-12, VR-17, VR-20 |
-| F3 | 4–5 | Streaming reader, record validation, `COPY` batches, checkpoint, duplicates, error rate, error report; ADR-003/004/005/014 | VR-1, VR-2, VR-9, VR-10, VR-11, VR-15; VR-21 for jobs and errors |
-| F4 | 6 | Preview, apply with advisory lock, re-import idempotency | VR-3, VR-6, VR-19 |
+| F0 | 1 | Repo, uv, Django project, apps, settings from env, custom user model (email login) before the first migration, `/health/live` (FR-OBS-2), domain-purity architecture test (NFR-10), compose (postgres, redis, minio, migrate), CI lint/types/test, ADR-001/007/010 | `docker compose up` green; CI green |
+| F1 | 2 | Orgs, memberships, JWT, login throttling (FR-ACC-7), `OrgScopedViewSet`, problem+json, request id middleware and JSON logs (FR-OBS-1), OpenAPI schema and docs, `seed_demo`; ADR-009/013 | VR-7 green on the routes that exist; VR-21 for auth |
+| F2 | 3 | Uploads with presigned POST, job creation with idempotency, job list and detail with cursor pagination, state machine in `domain`, request id propagated to Celery (FR-OBS-1), `/health` with db, redis and storage (FR-OBS-2); ADR-002/012 | VR-12, VR-17, VR-20 |
+| F3 | 4–5 | `Product` model (needed by the preview diff), streaming reader, record validation, `COPY` batches, checkpoint, duplicates, error rate, error report, error list and error-report endpoints (FR-VAL-11/12); ADR-003/004/005/014 | VR-1, VR-2, VR-9, VR-10, VR-11, VR-15; VR-21 for jobs and errors |
+| F4 | 6 | Preview endpoint (FR-PRV-2), apply with advisory lock, re-import idempotency, catalog API (FR-CAT-1/2) | VR-3, VR-6, VR-19 |
 | F5 | 7 | Channels consumer, tickets, progress events, demo page (Should); ADR-011 | VR-14 |
 | F6 | 8 | Rescuer, cancel, housekeeping, chaos tests; `sync` mode if on schedule; ADR-008 | VR-4, VR-5, VR-13, VR-22, (VR-18) |
 | F7 | 9 | Generator + oracle, demo profile, smoke job, query budget, metrics, benchmark | VR-8, VR-16, VR-23; NFR-1/2 measured |
