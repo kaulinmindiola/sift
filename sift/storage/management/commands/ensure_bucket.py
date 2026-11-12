@@ -12,13 +12,15 @@ shell. A Django command is testable and independent of the storage vendor.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from botocore.exceptions import ConnectionError as BotoConnectionError
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
@@ -49,6 +51,31 @@ def _error_code(error: ClientError) -> str:
     return str(error.response.get("Error", {}).get("Code", ""))
 
 
+def wait_for_storage(client: S3Client, timeout_s: float, interval_s: float = 1.0) -> None:
+    """Block until storage answers, or raise ``CommandError`` after ``timeout_s``.
+
+    The MinIO image has no shell or curl, so compose cannot healthcheck it;
+    the one-shot ``migrate`` service waits here instead.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            client.list_buckets()
+            return
+        except (BotoConnectionError, ClientError) as error:
+            if isinstance(error, ClientError) and _status(error) < 500:
+                raise
+            if time.monotonic() >= deadline:
+                raise CommandError(
+                    f"Storage not reachable at {settings.S3_ENDPOINT} after {timeout_s:g} s."
+                ) from error
+            time.sleep(interval_s)
+
+
+def _status(error: ClientError) -> int:
+    return int(error.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0))
+
+
 def ensure_bucket(client: S3Client, bucket: str) -> bool:
     """Create ``bucket`` unless it exists and strip any policy. Return True if created."""
     created = True
@@ -70,9 +97,19 @@ def ensure_bucket(client: S3Client, bucket: str) -> bool:
 class Command(BaseCommand):
     help = "Create the private storage bucket if it does not exist (idempotent)."
 
+    def add_arguments(self, parser: CommandParser) -> None:
+        parser.add_argument(
+            "--wait",
+            type=float,
+            default=0,
+            help="Seconds to keep retrying while storage is starting (default: 0, no retry).",
+        )
+
     def handle(self, *args: Any, **options: Any) -> None:
         bucket = settings.S3_BUCKET
-        created = ensure_bucket(storage_client(), bucket)
+        client = storage_client()
+        wait_for_storage(client, options["wait"])
+        created = ensure_bucket(client, bucket)
         if created:
             self.stdout.write(self.style.SUCCESS(f"Created private bucket '{bucket}'."))
         else:

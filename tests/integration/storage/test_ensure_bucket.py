@@ -15,6 +15,7 @@ import pytest
 from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import override_settings
 
 from sift.storage.management.commands.ensure_bucket import storage_client
@@ -94,3 +95,9 @@ def test_anonymous_reads_are_refused(bucket: str) -> None:
         urlopen(f"{settings.S3_ENDPOINT}/{bucket}/probe.csv", timeout=5)  # noqa: S310
 
     assert error.value.code == 403
+
+
+@override_settings(S3_ENDPOINT="http://127.0.0.1:1")
+def test_gives_up_with_a_clear_error_when_storage_is_unreachable() -> None:
+    with pytest.raises(CommandError, match="Storage not reachable"):
+        call_command("ensure_bucket", wait=1)
