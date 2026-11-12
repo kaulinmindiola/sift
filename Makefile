@@ -11,7 +11,7 @@ help:
 > @echo "infra    start postgres, redis, minio and run migrations"
 > @echo "api      run the API natively with autoreload"
 > @echo "fmt      format and autofix"
-> @echo "lint     ruff, format check and migrations check"
+> @echo "lint     ruff, format check, architecture tests, migrations check"
 > @echo "types    mypy"
 > @echo "test     pytest without chaos tests, with coverage"
 > @echo "check    lint + types + test (run before every commit)"
@@ -39,6 +39,7 @@ fmt:
 lint:
 > uv run ruff check .
 > uv run ruff format --check .
+> uv run pytest tests/architecture -q
 > uv run python manage.py makemigrations --check --dry-run
 
 types:
