@@ -1,8 +1,10 @@
 # Sift — SRS and SDD
 
-Version 0.1.1 · 2026-11-11 · Status: draft (decisions D1–D12 open, section 19)
+Version 0.1.2 · 2026-11-12 · Status: draft (decisions D1–D12 open, section 19)
 
 Revision 0.1.1: table names aligned with section 8; requirements without a phase scheduled in section 20; domain-purity check mechanism stated (NFR-10).
+
+Revision 0.1.2: the `minio-init` service is replaced by the `ensure_bucket` management command and the MinIO image is pinned by digest (ADR-015).
 
 **Sift imports large CSV files into a multi-tenant catalog without loading them into memory, without applying half a file, and without applying anything twice.**
 
@@ -315,8 +317,7 @@ Rules: views and tasks call services; services own transactions; `domain` is pur
 | api | `uvicorn sift.asgi:application` | DRF over HTTP and Channels over WebSocket in one ASGI app **\[DECISION D10\]** |
 | worker | `celery -A sift worker -Q imports` | validation and apply |
 | beat | `celery -A sift beat` | rescuer and housekeeping |
-| migrate | `manage.py migrate && manage.py seed_demo` | one-shot, before api |
-| minio-init | `mc mb` | creates the private bucket |
+| migrate | `manage.py migrate && manage.py ensure_bucket --wait 60 && manage.py seed_demo` | one-shot, before api; creates the private bucket idempotently |
 
 DRF views are synchronous and run in the ASGI thread pool; only the consumer is async.
 
@@ -629,7 +630,7 @@ sift/
   .github/workflows/ci.yml
 ```
 
-**Run.** `docker compose up --build` starts postgres, redis, minio, minio-init, migrate (with `seed_demo`: org `acme`, user `demo@sift.local`), api, worker, beat. `docker compose --profile demo run --rm demo` generates a file, uploads it, follows the WebSocket, applies and verifies against the oracle.
+**Run.** `docker compose up --build` starts postgres, redis, minio, migrate (with `ensure_bucket` and `seed_demo`: org `acme`, user `demo@sift.local`), api, worker, beat. `docker compose --profile demo run --rm demo` generates a file, uploads it, follows the WebSocket, applies and verifies against the oracle.
 
 **Generator.** `python -m tools.generate --rows N --error-rate r --dup-rate d --seed s --out f.csv` writes the file and `f.oracle.json` (expected `total_rows`, `valid_rows`, `error_counts`, `to_insert`). It does not import `sift`, so it checks the service as a black box.
 
@@ -686,6 +687,7 @@ Each ADR is written in `docs/adr/NNN-title.md` (template: Status, Context, Decis
 | 012 | Import idempotency | `Idempotency-Key` on create + hash-based upsert; file hash only warns | Block identical files by hash (prevents intentional re-imports) | F2/F4 |
 | 013 | Auth for API and WebSocket | simplejwt for REST; single-use Redis ticket for WebSocket **\[DECISION D4\]** | JWT in query string; session cookies | F1/F5 |
 | 014 | Invalid rows policy | Reject above an error-rate threshold, else apply valid rows **\[DECISION D2\]** | Strict all-or-nothing; always apply valid rows | F3 |
+| 015 | Local object storage | Chainguard MinIO image pinned by digest; bucket created by the `ensure_bucket` command | `minio/minio` and `minio/mc` (no longer published); `pgsty/silo` fork | F0 |
 
 ## 19. Open decisions
 
