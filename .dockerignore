@@ -1,0 +1,20 @@
+# Only the files the image needs are copied explicitly in the Dockerfile;
+# this keeps the build context small and secrets out of it.
+.git
+.github
+.venv
+.env
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.hypothesis
+.coverage
+.coverage.*
+coverage.xml
+htmlcov
+bench-out
+docs
+tests
+*.csv
