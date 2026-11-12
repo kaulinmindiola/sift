@@ -1,0 +1,78 @@
+# Quality gates (NFR-7). Jobs chaos (F6) and smoke (F7) are added in their phases.
+name: CI
+
+on:
+  push:
+    branches: ["phase/**", "fix/**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Settings refuse to start without secrets; these are CI-only throwaway values
+# that match the compose defaults used by the test job.
+env:
+  DJANGO_SECRET_KEY: ci-only-insecure-secret-key
+  DB_PASSWORD: sift-dev-password
+  S3_ACCESS_KEY: sift
+  S3_SECRET_KEY: sift-dev-secret
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Architecture tests
+        run: uv run pytest tests/architecture -q
+      - name: Migrations are up to date
+        run: uv run python manage.py makemigrations --check --dry-run
+
+  types:
+    name: types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Mypy
+        run: uv run mypy
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # The same images, versions and MinIO digest as local development:
+      # docker-compose.yml is the single source of truth for infrastructure.
+      - name: Start PostgreSQL, Redis and MinIO
+        run: docker compose up -d --wait postgres redis minio
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Wait for storage and create the bucket
+        run: uv run python manage.py ensure_bucket --wait 60
+      - name: Tests with coverage
+        run: uv run pytest -m "not chaos" --cov
+      - name: Infrastructure logs
+        if: failure()
+        run: docker compose logs postgres redis minio
